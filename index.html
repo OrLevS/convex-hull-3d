@@ -20,7 +20,6 @@
   .labels{position:absolute;inset:0;pointer-events:none;direction:ltr}
   .labels > div{top:0;left:0}
   .lbl{font-weight:800;font-size:15px;color:var(--brown);transform:translate(10px,-12px);text-shadow:0 0 3px var(--cream),0 0 3px var(--cream)}
-  .lbl.inner{color:#9a8c7a}
   .axis-lbl{font-weight:800;font-size:14px}
   h1{font-size:26px;margin:0 0 4px;font-weight:800}
   .hint{font-size:14px;line-height:1.45;margin:0 0 14px;opacity:.85}
@@ -47,12 +46,12 @@
   #list input{width:58px;font:inherit;font-size:14px;padding:3px 4px;border:1.5px solid var(--beige);border-radius:8px;background:#fff;color:var(--navy);direction:ltr;text-align:center}
   #list .ax{font-size:12px;opacity:.6}
   #list .del{border:none;background:none;padding:2px 6px;font-size:16px;color:var(--brown)}
-  #segs{list-style:none;margin:0;padding:0}
-  #segs li{display:flex;align-items:center;gap:10px;padding:4px 6px;border-radius:10px;margin-bottom:3px}
-  #segs li.sel{background:var(--gold)}
-  #segs .name{font-weight:800;color:var(--brown);cursor:pointer;min-width:40px}
-  #segs .len{font-size:14px;opacity:.75;flex:1}
-  #segs .del{border:none;background:none;padding:2px 6px;font-size:16px;color:var(--brown)}
+  #shapes{list-style:none;margin:0;padding:0}
+  #shapes li{display:flex;align-items:center;gap:10px;padding:4px 6px;border-radius:10px;margin-bottom:3px}
+  #shapes li.sel{background:var(--gold)}
+  #shapes .name{font-weight:800;color:var(--brown);cursor:pointer;min-width:70px}
+  #shapes .len{font-size:14px;opacity:.75;flex:1}
+  #shapes .del{border:none;background:none;padding:2px 6px;font-size:16px;color:var(--brown)}
   .sec{font-weight:800;margin:14px 0 6px;font-size:15px}
   #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--navy);color:var(--cream);padding:8px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
   #toast.show{opacity:1}
@@ -77,11 +76,14 @@
       <b>קליק על הרצפה</b> מוסיף נקודה. <b>גרירת נקודה</b> מזיזה אותה אופקית,
       ועם <b>Shift</b> (או כפתור "אנכי") — למעלה ולמטה. גרירה ברקע מסובבת את המבט, גלגלת מקרבת.
       Delete מוחק את מה שנבחר.<br>
-      במצב <b>קטע</b>: שני קליקים (על הרצפה או על נקודות קיימות) יוצרים קטע, וגרירת הקטע מזיזה את שני הקצוות יחד.
+      <b>קטע</b>: שני קליקים (על הרצפה או על נקודות קיימות).
+      <b>עיגול</b>: שלושה קליקים — העיגול עובר דרך שלוש הנקודות, ואם מרימים אחת מהן הוא נוטה במרחב.
+      גרירת קטע או עיגול מזיזה אותו שלם.
     </p>
     <div class="row">
       <button id="mPoint" class="on">● נקודה</button>
       <button id="mSeg">⟋ קטע</button>
+      <button id="mCirc">◯ עיגול</button>
       <button id="mMove">✋ רק הזזה</button>
       <button id="bVert">↕ אנכי</button>
     </div>
@@ -103,14 +105,17 @@
         <option value="rand">ענן אקראי</option>
         <option value="skew">שני קטעים מצטלבים</option>
         <option value="segprism">שלושה קטעים מקבילים</option>
+        <option value="cone">חרוט (עיגול + נקודה)</option>
+        <option value="circseg">עיגול וקטע</option>
+        <option value="cyl">גליל (שני עיגולים)</option>
       </select>
       <button id="bClear">ניקוי</button>
       <button id="bShare" class="primary">🔗 העתקת קישור</button>
     </div>
     <div class="sec">נקודות</div>
     <ul id="list"></ul>
-    <div id="segSec" class="sec">קטעים</div>
-    <ul id="segs"></ul>
+    <div id="shapeSec" class="sec">קטעים ועיגולים</div>
+    <ul id="shapes"></ul>
   </aside>
   <main id="view"></main>
 </div>
@@ -124,6 +129,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 
 const C = { cream:0xFBF5ED, beige:0xE6D3B9, navy:0x264653, coral:0xE76F51, gold:0xE9C46A, teal:0x2A9D8F, brown:0x5A2A0C, sand:0xF4A261 };
 const EPS = 1e-6;
+const CIRCLE_SAMPLES = 96;
 const $ = id => document.getElementById(id);
 
 // ---------- scene ----------
@@ -169,7 +175,7 @@ const matHull  = new THREE.MeshStandardMaterial({ color:C.coral, roughness:.5 })
 const matInner = new THREE.MeshStandardMaterial({ color:0xb5a894, roughness:.6 });
 const matSel   = new THREE.MeshStandardMaterial({ color:C.gold, roughness:.4, emissive:0x3a2a00 });
 const pts = [];          // {name, v, mesh, lbl, onHull}
-let selected = null;
+let selected = null;     // a point or a shape
 let nameCounter = 0;
 
 function nextName() {
@@ -191,43 +197,73 @@ function addPoint(x, y, z, silent) {
   return p;
 }
 function removePointRaw(p) {
-  segs.filter(s => s.a === p || s.b === p).forEach(removeSegRaw);
+  shapes.filter(s => s.ps.includes(p)).forEach(removeShapeRaw);
   p.mesh.remove(p.lbl); p.lbl.element.remove(); scene.remove(p.mesh);
   pts.splice(pts.indexOf(p), 1);
   if (selected === p) selected = null;
-  if (pending === p) cancelPending();
+  if (pending.includes(p)) cancelPending();
 }
 function removePoint(p) { removePointRaw(p); refresh(); }
 function clearAll() { [...pts].forEach(removePointRaw); selected = null; nameCounter = 0; cancelPending(); }
 function select(o) { selected = o; paint(); markListSel(); }
 function paint() {
   pts.forEach(p => p.mesh.material = p === selected ? matSel : (p.onHull ? matHull : matInner));
-  segs.forEach(s => s.mesh.material = s === selected ? matSegSel : matSeg);
+  shapes.forEach(s => s.mesh.material = s === selected ? matShapeSel : matShape);
 }
 
-// ---------- segments ----------
-const segs = [];         // {a, b, mesh}  — a, b are points
+// ---------- shapes: segments (2 points) and circles (3 points on the circle) ----------
+const shapes = [];       // {kind:'seg'|'circ', ps:[points], mesh}
 const cylGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 12);
-const matSeg    = new THREE.MeshStandardMaterial({ color:C.brown, roughness:.6 });
-const matSegSel = new THREE.MeshStandardMaterial({ color:C.gold, roughness:.4, emissive:0x3a2a00 });
+const matShape    = new THREE.MeshStandardMaterial({ color:C.brown, roughness:.6 });
+const matShapeSel = new THREE.MeshStandardMaterial({ color:C.gold, roughness:.4, emissive:0x3a2a00 });
 const UP_Y = new THREE.Vector3(0, 1, 0);
-function placeSeg(s) {
-  const d = s.b.v.clone().sub(s.a.v), L = d.length();
-  s.mesh.visible = L > 1e-6; if (!s.mesh.visible) return;
-  s.mesh.position.copy(s.a.v).addScaledVector(d, 0.5);
-  s.mesh.quaternion.setFromUnitVectors(UP_Y, d.normalize());
-  s.mesh.scale.set(1, L, 1);
+
+// circle through three points in space (circumcircle); null if they are collinear
+function circleOf(a, b, c, n = CIRCLE_SAMPLES) {
+  const ab = b.clone().sub(a), ac = c.clone().sub(a), N = ab.clone().cross(ac), N2 = N.lengthSq();
+  if (N2 < 1e-8) return null;
+  const t1 = N.clone().cross(ab).multiplyScalar(ac.lengthSq());
+  const t2 = ac.clone().cross(N).multiplyScalar(ab.lengthSq());
+  const center = a.clone().add(t1.add(t2).divideScalar(2 * N2));
+  const r = center.distanceTo(a);
+  const u = a.clone().sub(center).normalize(), w = N.clone().normalize().cross(u);
+  const ring = [];
+  for (let i = 0; i < n; i++) {
+    const t = 2 * Math.PI * i / n;
+    ring.push(center.clone().addScaledVector(u, r * Math.cos(t)).addScaledVector(w, r * Math.sin(t)));
+  }
+  return { center, r, ring };
 }
-function addSeg(a, b, silent) {
-  if (a === b || segs.some(s => (s.a === a && s.b === b) || (s.a === b && s.b === a))) return;
-  const s = { a, b, mesh: new THREE.Mesh(cylGeo, matSeg) };
-  s.mesh.userData.s = s; scene.add(s.mesh); segs.push(s); placeSeg(s);
+const circOfShape = s => circleOf(s.ps[0].v, s.ps[1].v, s.ps[2].v);
+
+function placeShape(s) {
+  if (s.kind === 'seg') {
+    const [a, b] = s.ps, d = b.v.clone().sub(a.v), L = d.length();
+    s.mesh.visible = L > 1e-6; if (!s.mesh.visible) return;
+    s.mesh.position.copy(a.v).addScaledVector(d, 0.5);
+    s.mesh.quaternion.setFromUnitVectors(UP_Y, d.normalize());
+    s.mesh.scale.set(1, L, 1);
+  } else {
+    const c = circOfShape(s);
+    s.mesh.visible = !!c; if (!c) return;
+    s.mesh.geometry.dispose();
+    s.mesh.geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(c.ring, true), CIRCLE_SAMPLES, 0.05, 8, true);
+  }
+}
+function addShape(kind, ps, silent) {
+  if (kind === 'seg' && (ps[0] === ps[1] || shapes.some(s => s.kind === 'seg' && s.ps.includes(ps[0]) && s.ps.includes(ps[1])))) return;
+  const s = { kind, ps, mesh: new THREE.Mesh(kind === 'seg' ? cylGeo : new THREE.BufferGeometry(), matShape) };
+  s.mesh.userData.s = s; scene.add(s.mesh); shapes.push(s); placeShape(s);
   if (!silent) { select(s); refresh(); }
+  return s;
 }
-function removeSegRaw(s) { scene.remove(s.mesh); segs.splice(segs.indexOf(s), 1); if (selected === s) selected = null; }
-function removeSeg(s, withEnds) {
-  removeSegRaw(s);
-  if (withEnds) [s.a, s.b].forEach(p => { if (pts.includes(p) && !segs.some(t => t.a === p || t.b === p)) removePointRaw(p); });
+function removeShapeRaw(s) {
+  scene.remove(s.mesh); if (s.kind === 'circ') s.mesh.geometry.dispose();
+  shapes.splice(shapes.indexOf(s), 1); if (selected === s) selected = null;
+}
+function removeShape(s, withPoints) {
+  removeShapeRaw(s);
+  if (withPoints) s.ps.forEach(p => { if (pts.includes(p) && !shapes.some(t => t.ps.includes(p))) removePointRaw(p); });
   refresh();
 }
 
@@ -254,7 +290,7 @@ function analyze(vs) {
   return { dim: 2, a, b, c, n };
 }
 
-function hull2D(P) { // monotone chain on {x,y,ref}
+function hull2D(P) { // Andrew's monotone chain on {x,y,v}
   P = [...P].sort((p, q) => p.x - q.x || p.y - q.y);
   const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
   const lo = [], up = [];
@@ -262,13 +298,21 @@ function hull2D(P) { // monotone chain on {x,y,ref}
   for (const p of P.slice().reverse()) { while (up.length >= 2 && cr(up[up.length-2], up[up.length-1], p) <= 1e-9) up.pop(); up.push(p); }
   return lo.slice(0, -1).concat(up.slice(0, -1));
 }
+function distToSeg2D(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+  const t = L2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2)) : 0;
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+}
 
 function updateHull() {
   clearHull();
-  segs.forEach(placeSeg);
-  const vs = pts.map(p => p.v);
+  shapes.forEach(placeShape);
+  const circles = shapes.filter(s => s.kind === 'circ').map(circOfShape).filter(Boolean);
+  const curved = circles.length > 0;
+  const vs = pts.map(p => p.v).concat(...circles.map(c => c.ring));
   const info = analyze(vs);
   const show = { faces: $('cFaces').checked, edges: $('cEdges').checked };
+  const approx = curved ? '≈ ' : '';
   pts.forEach(p => p.onHull = true);
   let html = '';
 
@@ -282,21 +326,23 @@ function updateHull() {
     html = `<div class="msg">כל הנקודות על ישר אחד — הקמור הוא קטע.</div><div>אורך: <b>${fmt(L)}</b></div>`;
   } else if (info.dim === 2) {
     const u = info.b.clone().sub(info.a).normalize(), w = info.n.clone().cross(u);
-    const P = pts.map(p => { const d = p.v.clone().sub(info.a); return { x: d.dot(u), y: d.dot(w), p }; });
-    const H = hull2D(P);
-    const onH = new Set(H.map(h => h.p)); pts.forEach(p => p.onHull = onH.has(p));
-    const ring = H.map(h => h.p.v.clone());
+    const to2 = v => { const d = v.clone().sub(info.a); return { x: d.dot(u), y: d.dot(w), v }; };
+    const H = hull2D(vs.map(to2));
+    pts.forEach(p => { const q = to2(p.v); p.onHull = H.some((h, i) => distToSeg2D(q, h, H[(i + 1) % H.length]) < 1e-3); });
+    const ring = H.map(h => h.v.clone());
     let area = 0; for (let i = 0; i < H.length; i++) { const p = H[i], q = H[(i+1) % H.length]; area += p.x * q.y - q.x * p.y; }
     if (show.faces) {
       const tri = []; for (let i = 1; i < ring.length - 1; i++) tri.push(ring[0], ring[i], ring[i+1]);
       hullGroup.add(new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(tri), faceMat));
     }
     if (show.edges) hullGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ring), edgeMat));
-    html = `<div class="msg">כל הנקודות במישור אחד — הקמור הוא מצולע בעל ${H.length} קודקודים.</div><div>שטח: <b>${fmt(Math.abs(area) / 2)}</b></div>`;
+    html = curved
+      ? `<div class="msg">הכול במישור אחד — הקמור הוא צורה שטוחה עם שפה עקומה.</div><div>שטח: <b>${approx}${fmt(Math.abs(area) / 2)}</b></div>`
+      : `<div class="msg">כל הנקודות במישור אחד — הקמור הוא מצולע בעל ${H.length} קודקודים.</div><div>שטח: <b>${fmt(Math.abs(area) / 2)}</b></div>`;
   } else {
     const geo = new ConvexGeometry(vs);
     const pos = geo.attributes.position;
-    const vset = new Set(), planes = new Set();
+    const vset = new Set(), planes = new Set(), planeList = [];
     let vol = 0, area = 0;
     const A = new THREE.Vector3(), B = new THREE.Vector3(), Cc = new THREE.Vector3(), cen = new THREE.Vector3();
     vs.forEach(v => cen.add(v)); cen.divideScalar(vs.length);
@@ -307,26 +353,34 @@ function updateHull() {
       const ar = cr.length() / 2; if (ar < 1e-9) continue;
       area += ar;
       const n = cr.normalize();
+      planeList.push([n, n.dot(A)]);
       planes.add(`${n.x.toFixed(3)},${n.y.toFixed(3)},${n.z.toFixed(3)},${n.dot(A).toFixed(3)}`);
       vol += Math.abs(A.clone().sub(cen).dot(B.clone().sub(cen).cross(Cc.clone().sub(cen)))) / 6;
     }
-    const edges = new THREE.EdgesGeometry(geo, 1);
-    const V = vset.size, E = edges.attributes.position.count / 2, F = planes.size;
-    pts.forEach(p => p.onHull = vset.has(key(p.v)));
+    // a point is on the hull if it lies on the plane of some hull face
+    pts.forEach(p => p.onHull = planeList.some(([n, d]) => Math.abs(n.dot(p.v) - d) < 1e-3));
+    const edges = new THREE.EdgesGeometry(geo, curved ? 20 : 1);
     if (show.faces) hullGroup.add(new THREE.Mesh(geo, faceMat)); else geo.dispose();
     if (show.edges) hullGroup.add(new THREE.LineSegments(edges, edgeMat)); else edges.dispose();
     const inner = pts.filter(p => !p.onHull).length;
-    html = `<div class="grid4">
-        <div><b>${V}</b>קודקודים</div><div><b>${E}</b>צלעות</div><div><b>${F}</b>פאות</div><div><b>${inner}</b>בפנים</div>
-      </div>
-      <div class="euler">אוילר: <span dir="ltr">V − E + F = ${V} − ${E} + ${F} = <b>${V - E + F}</b></span></div>
-      <div style="margin-top:6px">נפח: <b>${fmt(vol)}</b> &nbsp;·&nbsp; שטח פנים: <b>${fmt(area)}</b></div>`;
+    if (curved) {
+      html = `<div class="msg">הקמור כולל עיגול, ולכן יש לו גם משטח עקום — אין לו מספר סופי של פאות וקודקודים.</div>
+        <div style="margin-top:6px">נפח: <b>≈ ${fmt(vol)}</b> &nbsp;·&nbsp; שטח פנים: <b>≈ ${fmt(area)}</b></div>
+        <div style="margin-top:4px;opacity:.7;font-size:13px">החישוב מקרב כל עיגול במצולע של ${CIRCLE_SAMPLES} צלעות.</div>`;
+    } else {
+      const V = vset.size, E = edges.attributes.position.count / 2, F = planes.size;
+      html = `<div class="grid4">
+          <div><b>${V}</b>קודקודים</div><div><b>${E}</b>צלעות</div><div><b>${F}</b>פאות</div><div><b>${inner}</b>בפנים</div>
+        </div>
+        <div class="euler">אוילר: <span dir="ltr">V − E + F = ${V} − ${E} + ${F} = <b>${V - E + F}</b></span></div>
+        <div style="margin-top:6px">נפח: <b>${fmt(vol)}</b> &nbsp;·&nbsp; שטח פנים: <b>${fmt(area)}</b></div>`;
+    }
   }
   $('stats').innerHTML = html;
   paint();
 }
 
-// ---------- side list ----------
+// ---------- side lists ----------
 function renderList() {
   const ul = $('list'); ul.innerHTML = '';
   pts.forEach(p => {
@@ -346,52 +400,66 @@ function renderList() {
   });
   syncList(); markListSel();
 }
+function renderShapeList() {
+  const ul = $('shapes'); ul.innerHTML = '';
+  $('shapeSec').style.display = shapes.length ? '' : 'none';
+  shapes.forEach(s => {
+    const li = document.createElement('li'); s.li = li;
+    const names = s.ps.map(p => p.name).join('');
+    li.innerHTML = `<span class="name">${s.kind === 'seg' ? 'קטע ' : 'עיגול '}${names}</span><span class="len"></span><button class="del" title="מחיקה">✕</button>`;
+    li.querySelector('.name').onclick = () => select(s);
+    li.querySelector('.del').onclick = () => removeShape(s, true);
+    ul.appendChild(li);
+  });
+  syncList(); markListSel();
+}
 function syncList() {
   pts.forEach(p => {
     if (!p.li) return;
     p.li.classList.toggle('inner', !p.onHull);
     p.li.querySelectorAll('input').forEach(inp => { if (document.activeElement !== inp) inp.value = fmt(p.v[inp.dataset.a]); });
   });
-  segs.forEach(s => s.li && (s.li.querySelector('.len').textContent = 'אורך ' + fmt(s.a.v.distanceTo(s.b.v))));
-}
-function renderSegList() {
-  const ul = $('segs'); ul.innerHTML = '';
-  $('segSec').style.display = segs.length ? '' : 'none';
-  segs.forEach(s => {
-    const li = document.createElement('li'); s.li = li;
-    li.innerHTML = `<span class="name">${s.a.name}${s.b.name}</span><span class="len"></span><button class="del" title="מחיקה">✕</button>`;
-    li.querySelector('.name').onclick = () => select(s);
-    li.querySelector('.del').onclick = () => removeSeg(s, true);
-    ul.appendChild(li);
+  shapes.forEach(s => {
+    if (!s.li) return;
+    let t;
+    if (s.kind === 'seg') t = 'אורך ' + fmt(s.ps[0].v.distanceTo(s.ps[1].v));
+    else { const c = circOfShape(s); t = c ? 'רדיוס ' + fmt(c.r) : 'הנקודות על ישר אחד'; }
+    s.li.querySelector('.len').textContent = t;
   });
-  syncList(); markListSel();
 }
-function markListSel() { [...pts, ...segs].forEach(o => o.li && o.li.classList.toggle('sel', o === selected)); }
+function markListSel() { [...pts, ...shapes].forEach(o => o.li && o.li.classList.toggle('sel', o === selected)); }
 
 // ---------- share link ----------
 function saveHash() {
   const s = pts.map(p => [p.v.x, p.v.y, p.v.z].map(fmt).join(',')).join(';');
-  const g = segs.map(t => pts.indexOf(t.a) + '-' + pts.indexOf(t.b)).join(';');
-  history.replaceState(null, '', s ? '#p=' + s + (g ? '&s=' + g : '') : location.pathname + location.search);
+  const idx = (kind) => shapes.filter(t => t.kind === kind).map(t => t.ps.map(p => pts.indexOf(p)).join('-')).join(';');
+  const sg = idx('seg'), cc = idx('circ');
+  history.replaceState(null, '', s ? '#p=' + s + (sg ? '&s=' + sg : '') + (cc ? '&c=' + cc : '') : location.pathname + location.search);
 }
 function loadHash() {
   const m = location.hash.match(/p=([-\d.,;e]+)/); if (!m) return false;
   m[1].split(';').forEach(t => { const [x, y, z] = t.split(',').map(Number); if ([x, y, z].every(Number.isFinite)) addPoint(x, y, z, true); });
-  const m2 = location.hash.match(/s=([\d;-]+)/);
-  if (m2) m2[1].split(';').forEach(t => { const [i, j] = t.split('-').map(Number); if (pts[i] && pts[j]) addSeg(pts[i], pts[j], true); });
+  [['s', 'seg', 2], ['c', 'circ', 3]].forEach(([k, kind, n]) => {
+    const mm = location.hash.match(new RegExp('&' + k + '=([\\d;-]+)'));
+    if (mm) mm[1].split(';').forEach(t => { const ps = t.split('-').map(i => pts[+i]); if (ps.length === n && ps.every(Boolean)) addShape(kind, ps, true); });
+  });
   return pts.length > 0;
 }
-function refresh() { updateHull(); renderList(); renderSegList(); saveHash(); }
+function refresh() { updateHull(); renderList(); renderShapeList(); saveHash(); }
 
 // ---------- presets ----------
+const R3 = 1.732;
 const PRESETS = {
-  tetra: [[2,0,0],[-1,1.73,0],[-1,-1.73,0],[0,0,3]],
+  tetra: [[2,0,0],[-1,R3,0],[-1,-R3,0],[0,0,3]],
   cube:  [[-1.5,-1.5,0],[1.5,-1.5,0],[1.5,1.5,0],[-1.5,1.5,0],[-1.5,-1.5,3],[1.5,-1.5,3],[1.5,1.5,3],[-1.5,1.5,3]],
   pyr:   [[-2,-2,0],[2,-2,0],[2,2,0],[-2,2,0],[0,0,3.5]],
-  prism: [[2,0,0],[-1,1.73,0],[-1,-1.73,0],[2,0,3],[-1,1.73,3],[-1,-1.73,3]],
+  prism: [[2,0,0],[-1,R3,0],[-1,-R3,0],[2,0,3],[-1,R3,3],[-1,-R3,3]],
   octa:  [[2,0,2],[-2,0,2],[0,2,2],[0,-2,2],[0,0,4],[0,0,0]],
   skew:  { p: [[-2,0,0],[2,0,0],[0,-2,3],[0,2,3]], s: [[0,1],[2,3]] },
-  segprism: { p: [[2,0,0],[2,0,3],[-1,1.73,0],[-1,1.73,3],[-1,-1.73,0],[-1,-1.73,3]], s: [[0,1],[2,3],[4,5]] },
+  segprism: { p: [[2,0,0],[2,0,3],[-1,R3,0],[-1,R3,3],[-1,-R3,0],[-1,-R3,3]], s: [[0,1],[2,3],[4,5]] },
+  cone:    { p: [[2,0,0],[-1,R3,0],[-1,-R3,0],[0,0,3.5]], c: [[0,1,2]] },
+  circseg: { p: [[2,0,0],[-1,R3,0],[-1,-R3,0],[0,-2,3],[0,2,3]], c: [[0,1,2]], s: [[3,4]] },
+  cyl:     { p: [[2,0,0],[-1,R3,0],[-1,-R3,0],[2,0,3],[-1,R3,3],[-1,-R3,3]], c: [[0,1,2],[3,4,5]] },
 };
 function loadPreset(k) {
   clearAll();
@@ -401,7 +469,8 @@ function loadPreset(k) {
   } else {
     const pr = PRESETS[k], ps = Array.isArray(pr) ? pr : pr.p;
     const made = ps.map(([x, y, z]) => addPoint(x, y, z, true));
-    (pr.s || []).forEach(([i, j]) => addSeg(made[i], made[j], true));
+    (pr.s || []).forEach(ix => addShape('seg', ix.map(i => made[i]), true));
+    (pr.c || []).forEach(ix => addShape('circ', ix.map(i => made[i]), true));
   }
   refresh();
 }
@@ -409,7 +478,7 @@ function loadPreset(k) {
 // ---------- interaction ----------
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-let mode = 'point', vertMode = false, drag = null, down = null, pending = null;
+let mode = 'point', vertMode = false, drag = null, down = null, pending = [];
 const snap = n => $('cSnap').checked ? Math.round(n * 2) / 2 : Math.round(n * 100) / 100;
 
 function setRay(e) {
@@ -418,7 +487,7 @@ function setRay(e) {
   ray.setFromCamera(ndc, camera);
 }
 const pickPoint = () => { const h = ray.intersectObjects(pts.map(p => p.mesh), false); return h.length ? h[0].object.userData.p : null; };
-const pickSeg = () => { const h = ray.intersectObjects(segs.map(s => s.mesh), false); return h.length ? h[0].object.userData.s : null; };
+const pickShape = () => { const h = ray.intersectObjects(shapes.map(s => s.mesh), false); return h.length ? h[0].object.userData.s : null; };
 
 function dragPlane(vertical, through) {
   if (vertical) {
@@ -429,29 +498,42 @@ function dragPlane(vertical, through) {
   return new THREE.Plane(new THREE.Vector3(0, 0, 1), -through.z);
 }
 
-// dashed preview line while drawing a segment
+// dashed preview while drawing a segment / circle
 const preview = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
   new THREE.LineDashedMaterial({ color:C.brown, dashSize:.2, gapSize:.15 }));
 preview.visible = false; scene.add(preview);
-function showPreview(to) { preview.geometry.setFromPoints([pending.v, to]); preview.computeLineDistances(); preview.visible = true; }
-function cancelPending() { pending = null; preview.visible = false; }
-function segPick(p) {
-  if (!pending) { pending = p; select(p); toast(`קצה ראשון: ${p.name} — עכשיו קליק על הקצה השני`); }
-  else if (pending !== p) { const a = pending; cancelPending(); addSeg(a, p); }
+function showPreview(to) {
+  let line = [...pending.map(p => p.v), to];
+  if (mode === 'circ' && pending.length === 2) { const c = circleOf(pending[0].v, pending[1].v, to); if (c) line = [...c.ring, c.ring[0]]; }
+  preview.geometry.setFromPoints(line); preview.computeLineDistances(); preview.visible = true;
+}
+function cancelPending() { pending = []; preview.visible = false; }
+function pickFor(p) {
+  const need = mode === 'seg' ? 2 : 3;
+  if (pending.includes(p)) return;
+  pending.push(p); select(p);
+  if (pending.length < need) {
+    toast(mode === 'seg' ? `קצה ראשון: ${p.name} — עכשיו קליק על הקצה השני` : `נקודה ${pending.length} מתוך 3 על העיגול`);
+    return;
+  }
+  const ps = pending; cancelPending();
+  if (mode === 'circ' && !circleOf(ps[0].v, ps[1].v, ps[2].v)) { toast('שלוש הנקודות על ישר אחד — אין עיגול שעובר דרכן'); return; }
+  addShape(mode, ps);
 }
 
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   setRay(e);
   const vertical = e.shiftKey || vertMode;
-  const p = pickPoint(), s = p ? null : pickSeg();
+  const p = pickPoint(), s = p ? null : pickShape();
   if (p || s) {
-    const through = p ? p.v : s.a.v.clone().add(s.b.v).multiplyScalar(0.5);
+    const through = p ? p.v : s.ps.reduce((acc, q) => acc.add(q.v), new THREE.Vector3()).divideScalar(s.ps.length);
     const plane = dragPlane(vertical, through);
     const hit = new THREE.Vector3();
     if (!ray.ray.intersectPlane(plane, hit)) return;
     select(p || s);
-    drag = { p, s, plane, vertical, start: hit.clone(), p0: p && p.v.clone(), a0: s && s.a.v.clone(), b0: s && s.b.v.clone(),
+    const moving = p ? [p] : s.ps;
+    drag = { p, s, plane, vertical, start: hit.clone(), moving, starts: moving.map(q => q.v.clone()),
              x: e.clientX, y: e.clientY, moved: false };
     controls.enabled = false;
     renderer.domElement.setPointerCapture(e.pointerId);
@@ -461,9 +543,9 @@ renderer.domElement.addEventListener('pointerdown', e => {
 renderer.domElement.addEventListener('pointermove', e => {
   setRay(e);
   if (!drag) {
-    const over = pickPoint() || pickSeg();
+    const over = pickPoint() || pickShape();
     renderer.domElement.style.cursor = over ? 'grab' : (mode === 'move' ? 'default' : 'crosshair');
-    if (pending) {
+    if (pending.length) {
       const hp = pickPoint(), hit = new THREE.Vector3();
       if (hp) showPreview(hp.v); else if (ray.ray.intersectPlane(floor, hit)) showPreview(hit);
     }
@@ -475,23 +557,20 @@ renderer.domElement.addEventListener('pointermove', e => {
   const hit = new THREE.Vector3();
   if (!ray.ray.intersectPlane(drag.plane, hit)) return;
   const d = hit.sub(drag.start);
-  // a point snaps to the grid; a segment moves rigidly (snapped displacement)
-  const apply = (v, v0, rigid) => {
-    const f = rigid ? (o, dd) => o + snap(dd) : (o, dd) => snap(o + dd);
-    if (drag.vertical) v.z = f(v0.z, d.z); else { v.x = f(v0.x, d.x); v.y = f(v0.y, d.y); }
-  };
-  if (drag.p) { apply(drag.p.v, drag.p0, false); drag.p.mesh.position.copy(drag.p.v); }
-  else {
-    apply(drag.s.a.v, drag.a0, true); apply(drag.s.b.v, drag.b0, true);
-    drag.s.a.mesh.position.copy(drag.s.a.v); drag.s.b.mesh.position.copy(drag.s.b.v);
-  }
+  // a single point snaps to the grid; a whole shape moves rigidly (snapped displacement)
+  const f = drag.p ? (o, dd) => snap(o + dd) : (o, dd) => o + snap(dd);
+  drag.moving.forEach((q, i) => {
+    const v0 = drag.starts[i];
+    if (drag.vertical) q.v.z = f(v0.z, d.z); else { q.v.x = f(v0.x, d.x); q.v.y = f(v0.y, d.y); }
+    q.mesh.position.copy(q.v);
+  });
   updateHull(); syncList();
 });
 
 renderer.domElement.addEventListener('pointerup', e => {
   if (drag) {
     const d = drag; drag = null; controls.enabled = true;
-    if (!d.moved && mode === 'seg' && d.p) segPick(d.p); else saveHash();
+    if (!d.moved && (mode === 'seg' || mode === 'circ') && d.p) pickFor(d.p); else saveHash();
     return;
   }
   if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) {
@@ -499,7 +578,7 @@ renderer.domElement.addEventListener('pointerup', e => {
     const hit = new THREE.Vector3();
     const onFloor = ray.ray.intersectPlane(floor, hit);
     if (mode === 'point' && onFloor) addPoint(snap(hit.x), snap(hit.y), 0);
-    else if (mode === 'seg' && onFloor) segPick(addPoint(snap(hit.x), snap(hit.y), 0));
+    else if ((mode === 'seg' || mode === 'circ') && onFloor) pickFor(addPoint(snap(hit.x), snap(hit.y), 0));
     else { cancelPending(); selected = null; paint(); markListSel(); }
   }
   down = null;
@@ -510,16 +589,17 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape') cancelPending();
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
     e.preventDefault();
-    selected.a ? removeSeg(selected, true) : removePoint(selected);
+    selected.kind ? removeShape(selected, true) : removePoint(selected);
   }
 });
 
 function setMode(m) {
   mode = m; cancelPending();
-  [['point', 'mPoint'], ['seg', 'mSeg'], ['move', 'mMove']].forEach(([k, id]) => $(id).classList.toggle('on', k === m));
+  [['point', 'mPoint'], ['seg', 'mSeg'], ['circ', 'mCirc'], ['move', 'mMove']].forEach(([k, id]) => $(id).classList.toggle('on', k === m));
 }
 $('mPoint').onclick = () => setMode('point');
 $('mSeg').onclick = () => setMode('seg');
+$('mCirc').onclick = () => setMode('circ');
 $('mMove').onclick = () => setMode('move');
 $('bVert').onclick = () => { vertMode = !vertMode; $('bVert').classList.toggle('on', vertMode); };
 ['cFaces', 'cEdges'].forEach(id => $(id).onchange = updateHull);
@@ -528,10 +608,10 @@ $('bClear').onclick = () => { clearAll(); refresh(); };
 $('preset').onchange = e => { if (e.target.value) loadPreset(e.target.value); e.target.value = ''; };
 $('bShare').onclick = async () => {
   saveHash();
-  try { await navigator.clipboard.writeText(location.href); toast('הקישור הועתק — הוא כולל את כל הנקודות'); }
+  try { await navigator.clipboard.writeText(location.href); toast('הקישור הועתק — הוא כולל את כל הצורות'); }
   catch { prompt('הקישור לשיתוף:', location.href); }
 };
-function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2200); }
+function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove('show'), 2200); }
 
 // ---------- resize & loop ----------
 function resize() {
