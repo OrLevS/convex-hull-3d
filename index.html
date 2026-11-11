@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>קמור תלת־ממדי</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#FBF5ED; --beige:#E6D3B9; --navy:#264653; --coral:#E76F51;
+    --sand:#F4A261; --gold:#E9C46A; --teal:#2A9D8F; --brown:#5A2A0C;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--cream);color:var(--navy);font-family:Assistant,system-ui,sans-serif}
+  #app{display:flex;height:100%;}
+  #panel{width:340px;flex:none;overflow-y:auto;padding:18px 16px;border-inline-end:2px solid var(--beige);background:var(--cream)}
+  #view{flex:1;position:relative;min-width:0;touch-action:none}
+  #view canvas{display:block}
+  .labels{position:absolute;inset:0;pointer-events:none}
+  .lbl{font-weight:800;font-size:15px;color:var(--brown);transform:translate(10px,-12px);text-shadow:0 0 3px var(--cream),0 0 3px var(--cream)}
+  .lbl.inner{color:#9a8c7a}
+  .axis-lbl{font-weight:800;font-size:14px}
+  h1{font-size:26px;margin:0 0 4px;font-weight:800}
+  .hint{font-size:14px;line-height:1.45;margin:0 0 14px;opacity:.85}
+  .hint b{color:var(--coral)}
+  .row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  button,select{font:inherit;font-size:14px;border:2px solid var(--navy);background:var(--cream);color:var(--navy);border-radius:999px;padding:5px 12px;cursor:pointer}
+  button:hover{background:var(--beige)}
+  button.on{background:var(--navy);color:var(--cream)}
+  button.primary{background:var(--coral);border-color:var(--coral);color:var(--cream)}
+  .checks{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:14px;margin-bottom:12px}
+  .checks label{display:flex;gap:5px;align-items:center;cursor:pointer}
+  .checks input{accent-color:var(--teal)}
+  #stats{background:#fff8;border:2px solid var(--beige);border-radius:16px;padding:10px 12px;margin-bottom:12px;font-size:14px}
+  #stats .msg{font-weight:600}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center;margin-bottom:6px}
+  .grid4 div{background:var(--cream);border-radius:10px;padding:4px 0}
+  .grid4 b{display:block;font-size:22px;color:var(--teal)}
+  .euler{text-align:center;font-weight:600}
+  #list{list-style:none;margin:0;padding:0}
+  #list li{display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:10px;margin-bottom:3px}
+  #list li.sel{background:var(--gold)}
+  #list .name{font-weight:800;width:30px;color:var(--coral);cursor:pointer}
+  #list li.inner .name{color:#9a8c7a}
+  #list input{width:58px;font:inherit;font-size:14px;padding:3px 4px;border:1.5px solid var(--beige);border-radius:8px;background:#fff;color:var(--navy);direction:ltr;text-align:center}
+  #list .ax{font-size:12px;opacity:.6}
+  #list .del{border:none;background:none;padding:2px 6px;font-size:16px;color:var(--brown)}
+  .sec{font-weight:800;margin:14px 0 6px;font-size:15px}
+  #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--navy);color:var(--cream);padding:8px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+  #toast.show{opacity:1}
+  @media (max-width:760px){
+    #app{flex-direction:column-reverse}
+    #panel{width:100%;height:42%;border-inline-end:none;border-top:2px solid var(--beige)}
+    #view{height:58%}
+  }
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <h1>קמור תלת־ממדי</h1>
+    <p class="hint">
+      <b>קליק על הרצפה</b> מוסיף נקודה. <b>גרירת נקודה</b> מזיזה אותה אופקית,
+      ועם <b>Shift</b> (או כפתור "אנכי") — למעלה ולמטה. גרירה ברקע מסובבת את המבט, גלגלת מקרבת.
+      Delete מוחק את הנקודה הנבחרת.
+    </p>
+    <div class="row">
+      <button id="bAdd" class="on">➕ הוספה בקליק</button>
+      <button id="bVert">↕ אנכי</button>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="cFaces" checked> פאות</label>
+      <label><input type="checkbox" id="cEdges" checked> צלעות</label>
+      <label><input type="checkbox" id="cLabels" checked> שמות</label>
+      <label><input type="checkbox" id="cSnap" checked> הצמדה לרשת (0.5)</label>
+    </div>
+    <div id="stats"></div>
+    <div class="row">
+      <select id="preset">
+        <option value="">צורות מוכנות…</option>
+        <option value="tetra">טטראדר</option>
+        <option value="cube">קובייה</option>
+        <option value="pyr">פירמידה ריבועית</option>
+        <option value="prism">מנסרה משולשת</option>
+        <option value="octa">אוקטאדר</option>
+        <option value="rand">ענן אקראי</option>
+      </select>
+      <button id="bClear">ניקוי</button>
+      <button id="bShare" class="primary">🔗 העתקת קישור</button>
+    </div>
+    <div class="sec">נקודות</div>
+    <ul id="list"></ul>
+  </aside>
+  <main id="view"></main>
+</div>
+<div id="toast"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+const C = { cream:0xFBF5ED, beige:0xE6D3B9, navy:0x264653, coral:0xE76F51, gold:0xE9C46A, teal:0x2A9D8F, brown:0x5A2A0C, sand:0xF4A261 };
+const EPS = 1e-6;
+const $ = id => document.getElementById(id);
+
+// ---------- scene ----------
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.domElement.className = 'labels';
+view.appendChild(labelRenderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(C.cream);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
+camera.up.set(0, 0, 1);               // z למעלה, כמו בגאוגברה
+camera.position.set(10, -13, 9);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 1);
+controls.enableDamping = true;
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0xb0a490, 1.6); hemi.position.set(0, 0, 1); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(6, -4, 12); scene.add(sun);
+
+const grid = new THREE.GridHelper(20, 40, C.beige, C.beige);
+grid.rotation.x = Math.PI / 2;
+grid.material.transparent = true; grid.material.opacity = 0.7;
+scene.add(grid);
+
+function axis(dir, color, name, from = -10, to = 10) {
+  const g = new THREE.BufferGeometry().setFromPoints([dir.clone().multiplyScalar(from), dir.clone().multiplyScalar(to)]);
+  scene.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color })));
+  const d = document.createElement('div'); d.className = 'axis-lbl'; d.textContent = name;
+  d.style.color = '#' + color.toString(16).padStart(6, '0');
+  const o = new CSS2DObject(d); o.position.copy(dir.clone().multiplyScalar(to + 0.4)); scene.add(o);
+}
+axis(new THREE.Vector3(1,0,0), C.coral, 'x');
+axis(new THREE.Vector3(0,1,0), C.teal, 'y');
+axis(new THREE.Vector3(0,0,1), C.navy, 'z', -2, 8);
+
+// ---------- points ----------
+const sphereGeo = new THREE.SphereGeometry(0.16, 24, 16);
+const matHull  = new THREE.MeshStandardMaterial({ color:C.coral, roughness:.5 });
+const matInner = new THREE.MeshStandardMaterial({ color:0xb5a894, roughness:.6 });
+const matSel   = new THREE.MeshStandardMaterial({ color:C.gold, roughness:.4, emissive:0x3a2a00 });
+const pts = [];          // {name, v, mesh, lbl, onHull}
+let selected = null;
+let nameCounter = 0;
+
+function nextName() {
+  const used = new Set(pts.map(p => p.name));
+  while (true) {
+    const i = nameCounter++;
+    const n = String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : '');
+    if (!used.has(n)) return n;
+  }
+}
+
+function addPoint(x, y, z, silent) {
+  const p = { name: nextName(), v: new THREE.Vector3(x, y, z), onHull: true };
+  p.mesh = new THREE.Mesh(sphereGeo, matHull); p.mesh.userData.p = p; p.mesh.position.copy(p.v);
+  const d = document.createElement('div'); d.className = 'lbl'; d.textContent = p.name;
+  p.lbl = new CSS2DObject(d); p.mesh.add(p.lbl);
+  scene.add(p.mesh); pts.push(p);
+  if (!silent) { select(p); refresh(); }
+  return p;
+}
+function removePoint(p) {
+  p.mesh.remove(p.lbl); p.lbl.element.remove(); scene.remove(p.mesh);
+  pts.splice(pts.indexOf(p), 1);
+  if (selected === p) selected = null;
+  refresh();
+}
+function clearAll() { [...pts].forEach(p => { p.mesh.remove(p.lbl); p.lbl.element.remove(); scene.remove(p.mesh); }); pts.length = 0; selected = null; nameCounter = 0; }
+function select(p) { selected = p; paint(); markListSel(); }
+function paint() { pts.forEach(p => p.mesh.material = p === selected ? matSel : (p.onHull ? matHull : matInner)); }
+
+// ---------- hull ----------
+const hullGroup = new THREE.Group(); scene.add(hullGroup);
+const faceMat = new THREE.MeshStandardMaterial({ color:C.teal, transparent:true, opacity:.38, side:THREE.DoubleSide, depthWrite:false, flatShading:true, roughness:.8 });
+const edgeMat = new THREE.LineBasicMaterial({ color:C.navy });
+const fmt = n => (Math.abs(n) < 5e-4 ? 0 : n).toFixed(2).replace(/\.?0+$/, '');
+const key = v => `${v.x.toFixed(4)},${v.y.toFixed(4)},${v.z.toFixed(4)}`;
+
+function clearHull() { hullGroup.children.forEach(o => o.geometry && o.geometry.dispose()); hullGroup.clear(); }
+
+// dimension of the point set: returns {dim, a, b, c, n}
+function analyze(vs) {
+  if (vs.length === 0) return { dim: -1 };
+  const a = vs[0]; let b = null, best = 0;
+  for (const v of vs) { const d = v.distanceToSquared(a); if (d > best) { best = d; b = v; } }
+  if (best < EPS) return { dim: 0 };
+  const ab = b.clone().sub(a); let c = null; best = 0;
+  for (const v of vs) { const cr = ab.clone().cross(v.clone().sub(a)).lengthSq(); if (cr > best) { best = cr; c = v; } }
+  if (best < 1e-8 * ab.lengthSq()) return { dim: 1, a, b };
+  const n = ab.clone().cross(c.clone().sub(a)).normalize();
+  for (const v of vs) if (Math.abs(n.dot(v.clone().sub(a))) > 1e-6) return { dim: 3 };
+  return { dim: 2, a, b, c, n };
+}
+
+function hull2D(P) { // monotone chain on {x,y,ref}
+  P = [...P].sort((p, q) => p.x - q.x || p.y - q.y);
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lo = [], up = [];
+  for (const p of P) { while (lo.length >= 2 && cr(lo[lo.length-2], lo[lo.length-1], p) <= 1e-9) lo.pop(); lo.push(p); }
+  for (const p of P.slice().reverse()) { while (up.length >= 2 && cr(up[up.length-2], up[up.length-1], p) <= 1e-9) up.pop(); up.push(p); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+
+function updateHull() {
+  clearHull();
+  const vs = pts.map(p => p.v);
+  const info = analyze(vs);
+  const show = { faces: $('cFaces').checked, edges: $('cEdges').checked };
+  pts.forEach(p => p.onHull = true);
+  let html = '';
+
+  if (info.dim < 1) {
+    html = `<div class="msg">${pts.length ? 'נקודה אחת — עוד לא קמור.' : 'אין נקודות. קליק על הרצפה כדי להתחיל.'}</div>`;
+  } else if (info.dim === 1) {
+    const g = new THREE.BufferGeometry().setFromPoints([info.a, info.b]);
+    hullGroup.add(new THREE.Line(g, edgeMat));
+    const ab = info.b.clone().sub(info.a), L = ab.length();
+    pts.forEach(p => { const t = p.v.clone().sub(info.a).dot(ab) / (L * L); p.onHull = t < EPS || t > 1 - EPS; });
+    html = `<div class="msg">כל הנקודות על ישר אחד — הקמור הוא קטע.</div><div>אורך: <b>${fmt(L)}</b></div>`;
+  } else if (info.dim === 2) {
+    const u = info.b.clone().sub(info.a).normalize(), w = info.n.clone().cross(u);
+    const P = pts.map(p => { const d = p.v.clone().sub(info.a); return { x: d.dot(u), y: d.dot(w), p }; });
+    const H = hull2D(P);
+    const onH = new Set(H.map(h => h.p)); pts.forEach(p => p.onHull = onH.has(p));
+    const ring = H.map(h => h.p.v.clone());
+    let area = 0; for (let i = 0; i < H.length; i++) { const p = H[i], q = H[(i+1) % H.length]; area += p.x * q.y - q.x * p.y; }
+    if (show.faces) {
+      const tri = []; for (let i = 1; i < ring.length - 1; i++) tri.push(ring[0], ring[i], ring[i+1]);
+      hullGroup.add(new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(tri), faceMat));
+    }
+    if (show.edges) hullGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ring), edgeMat));
+    html = `<div class="msg">כל הנקודות במישור אחד — הקמור הוא מצולע בעל ${H.length} קודקודים.</div><div>שטח: <b>${fmt(Math.abs(area) / 2)}</b></div>`;
+  } else {
+    const geo = new ConvexGeometry(vs);
+    const pos = geo.attributes.position;
+    const vset = new Set(), planes = new Set();
+    let vol = 0, area = 0;
+    const A = new THREE.Vector3(), B = new THREE.Vector3(), Cc = new THREE.Vector3(), cen = new THREE.Vector3();
+    vs.forEach(v => cen.add(v)); cen.divideScalar(vs.length);
+    for (let i = 0; i < pos.count; i += 3) {
+      A.fromBufferAttribute(pos, i); B.fromBufferAttribute(pos, i+1); Cc.fromBufferAttribute(pos, i+2);
+      [A, B, Cc].forEach(v => vset.add(key(v)));
+      const cr = B.clone().sub(A).cross(Cc.clone().sub(A));
+      const ar = cr.length() / 2; if (ar < 1e-9) continue;
+      area += ar;
+      const n = cr.normalize();
+      planes.add(`${n.x.toFixed(3)},${n.y.toFixed(3)},${n.z.toFixed(3)},${n.dot(A).toFixed(3)}`);
+      vol += Math.abs(A.clone().sub(cen).dot(B.clone().sub(cen).cross(Cc.clone().sub(cen)))) / 6;
+    }
+    const edges = new THREE.EdgesGeometry(geo, 1);
+    const V = vset.size, E = edges.attributes.position.count / 2, F = planes.size;
+    pts.forEach(p => p.onHull = vset.has(key(p.v)));
+    if (show.faces) hullGroup.add(new THREE.Mesh(geo, faceMat)); else geo.dispose();
+    if (show.edges) hullGroup.add(new THREE.LineSegments(edges, edgeMat)); else edges.dispose();
+    const inner = pts.filter(p => !p.onHull).length;
+    html = `<div class="grid4">
+        <div><b>${V}</b>קודקודים</div><div><b>${E}</b>צלעות</div><div><b>${F}</b>פאות</div><div><b>${inner}</b>בפנים</div>
+      </div>
+      <div class="euler">אוילר: <span dir="ltr">V − E + F = ${V} − ${E} + ${F} = <b>${V - E + F}</b></span></div>
+      <div style="margin-top:6px">נפח: <b>${fmt(vol)}</b> &nbsp;·&nbsp; שטח פנים: <b>${fmt(area)}</b></div>`;
+  }
+  $('stats').innerHTML = html;
+  paint();
+}
+
+// ---------- side list ----------
+function renderList() {
+  const ul = $('list'); ul.innerHTML = '';
+  pts.forEach(p => {
+    const li = document.createElement('li'); p.li = li;
+    li.innerHTML = `<span class="name">${p.name}</span>
+      <span class="ax">x</span><input data-a="x" type="number" step="0.5">
+      <span class="ax">y</span><input data-a="y" type="number" step="0.5">
+      <span class="ax">z</span><input data-a="z" type="number" step="0.5">
+      <button class="del" title="מחיקה">✕</button>`;
+    li.querySelector('.name').onclick = () => select(p);
+    li.querySelectorAll('input').forEach(inp => {
+      inp.onfocus = () => select(p);
+      inp.oninput = () => { const n = parseFloat(inp.value); if (!isNaN(n)) { p.v[inp.dataset.a] = n; p.mesh.position.copy(p.v); updateHull(); syncList(); saveHash(); } };
+    });
+    li.querySelector('.del').onclick = () => removePoint(p);
+    ul.appendChild(li);
+  });
+  syncList(); markListSel();
+}
+function syncList() {
+  pts.forEach(p => {
+    if (!p.li) return;
+    p.li.classList.toggle('inner', !p.onHull);
+    p.li.querySelectorAll('input').forEach(inp => { if (document.activeElement !== inp) inp.value = fmt(p.v[inp.dataset.a]); });
+  });
+}
+function markListSel() { pts.forEach(p => p.li && p.li.classList.toggle('sel', p === selected)); }
+
+// ---------- share link ----------
+function saveHash() {
+  const s = pts.map(p => [p.v.x, p.v.y, p.v.z].map(fmt).join(',')).join(';');
+  history.replaceState(null, '', s ? '#p=' + s : location.pathname + location.search);
+}
+function loadHash() {
+  const m = location.hash.match(/p=([-\d.,;e]+)/); if (!m) return false;
+  m[1].split(';').forEach(t => { const [x, y, z] = t.split(',').map(Number); if ([x, y, z].every(Number.isFinite)) addPoint(x, y, z, true); });
+  return pts.length > 0;
+}
+function refresh() { updateHull(); renderList(); saveHash(); }
+
+// ---------- presets ----------
+const PRESETS = {
+  tetra: [[2,0,0],[-1,1.73,0],[-1,-1.73,0],[0,0,3]],
+  cube:  [[-1.5,-1.5,0],[1.5,-1.5,0],[1.5,1.5,0],[-1.5,1.5,0],[-1.5,-1.5,3],[1.5,-1.5,3],[1.5,1.5,3],[-1.5,1.5,3]],
+  pyr:   [[-2,-2,0],[2,-2,0],[2,2,0],[-2,2,0],[0,0,3.5]],
+  prism: [[2,0,0],[-1,1.73,0],[-1,-1.73,0],[2,0,3],[-1,1.73,3],[-1,-1.73,3]],
+  octa:  [[2,0,2],[-2,0,2],[0,2,2],[0,-2,2],[0,0,4],[0,0,0]],
+};
+function loadPreset(k) {
+  clearAll();
+  if (k === 'rand') {
+    const r = () => Math.round((Math.random() * 6 - 3) * 2) / 2;
+    for (let i = 0; i < 12; i++) addPoint(r(), r(), Math.round(Math.random() * 8) / 2, true);
+  } else PRESETS[k].forEach(([x, y, z]) => addPoint(x, y, z, true));
+  refresh();
+}
+
+// ---------- interaction ----------
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+let addMode = true, vertMode = false, drag = null, down = null;
+const snap = n => $('cSnap').checked ? Math.round(n * 2) / 2 : Math.round(n * 100) / 100;
+
+function setRay(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+}
+const pick = () => { const h = ray.intersectObjects(pts.map(p => p.mesh), false); return h.length ? h[0].object.userData.p : null; };
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  setRay(e);
+  const p = pick();
+  if (p) {
+    select(p);
+    const vertical = e.shiftKey || vertMode;
+    let plane;
+    if (vertical) {
+      const n = new THREE.Vector3(); camera.getWorldDirection(n); n.z = 0;
+      if (n.lengthSq() < EPS) n.set(0, 1, 0);
+      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n.normalize(), p.v);
+    } else plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -p.v.z);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(plane, hit)) return;
+    drag = { p, plane, vertical, off: hit.sub(p.v) };
+    controls.enabled = false;
+    renderer.domElement.setPointerCapture(e.pointerId);
+  } else down = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('pointermove', e => {
+  setRay(e);
+  if (!drag) { renderer.domElement.style.cursor = pick() ? 'grab' : (addMode ? 'crosshair' : 'default'); return; }
+  renderer.domElement.style.cursor = 'grabbing';
+  const hit = new THREE.Vector3();
+  if (!ray.ray.intersectPlane(drag.plane, hit)) return;
+  hit.sub(drag.off);
+  const v = drag.p.v;
+  if (drag.vertical) v.z = snap(hit.z); else { v.x = snap(hit.x); v.y = snap(hit.y); }
+  drag.p.mesh.position.copy(v);
+  updateHull(); syncList();
+});
+
+renderer.domElement.addEventListener('pointerup', e => {
+  if (drag) { drag = null; controls.enabled = true; saveHash(); return; }
+  if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) {
+    setRay(e);
+    const hit = new THREE.Vector3();
+    if (addMode && ray.ray.intersectPlane(floor, hit)) addPoint(snap(hit.x), snap(hit.y), 0);
+    else { selected = null; paint(); markListSel(); }
+  }
+  down = null;
+});
+
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); removePoint(selected); }
+});
+
+$('bAdd').onclick = () => { addMode = !addMode; $('bAdd').classList.toggle('on', addMode); };
+$('bVert').onclick = () => { vertMode = !vertMode; $('bVert').classList.toggle('on', vertMode); };
+['cFaces', 'cEdges'].forEach(id => $(id).onchange = updateHull);
+$('cLabels').onchange = () => labelRenderer.domElement.style.display = $('cLabels').checked ? '' : 'none';
+$('bClear').onclick = () => { clearAll(); refresh(); };
+$('preset').onchange = e => { if (e.target.value) loadPreset(e.target.value); e.target.value = ''; };
+$('bShare').onclick = async () => {
+  saveHash();
+  try { await navigator.clipboard.writeText(location.href); toast('הקישור הועתק — הוא כולל את כל הנקודות'); }
+  catch { prompt('הקישור לשיתוף:', location.href); }
+};
+function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2200); }
+
+// ---------- resize & loop ----------
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h); labelRenderer.setSize(w, h);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+resize();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); labelRenderer.render(scene, camera); });
+
+if (loadHash()) refresh(); else loadPreset('pyr');
+</script>
+</body>
+</html>
