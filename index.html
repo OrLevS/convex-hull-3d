@@ -17,7 +17,8 @@
   #panel{width:340px;flex:none;overflow-y:auto;padding:18px 16px;border-inline-end:2px solid var(--beige);background:var(--cream)}
   #view{flex:1;position:relative;min-width:0;touch-action:none}
   #view canvas{display:block}
-  .labels{position:absolute;inset:0;pointer-events:none}
+  .labels{position:absolute;inset:0;pointer-events:none;direction:ltr}
+  .labels > div{top:0;left:0}
   .lbl{font-weight:800;font-size:15px;color:var(--brown);transform:translate(10px,-12px);text-shadow:0 0 3px var(--cream),0 0 3px var(--cream)}
   .lbl.inner{color:#9a8c7a}
   .axis-lbl{font-weight:800;font-size:14px}
@@ -46,6 +47,12 @@
   #list input{width:58px;font:inherit;font-size:14px;padding:3px 4px;border:1.5px solid var(--beige);border-radius:8px;background:#fff;color:var(--navy);direction:ltr;text-align:center}
   #list .ax{font-size:12px;opacity:.6}
   #list .del{border:none;background:none;padding:2px 6px;font-size:16px;color:var(--brown)}
+  #segs{list-style:none;margin:0;padding:0}
+  #segs li{display:flex;align-items:center;gap:10px;padding:4px 6px;border-radius:10px;margin-bottom:3px}
+  #segs li.sel{background:var(--gold)}
+  #segs .name{font-weight:800;color:var(--brown);cursor:pointer;min-width:40px}
+  #segs .len{font-size:14px;opacity:.75;flex:1}
+  #segs .del{border:none;background:none;padding:2px 6px;font-size:16px;color:var(--brown)}
   .sec{font-weight:800;margin:14px 0 6px;font-size:15px}
   #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--navy);color:var(--cream);padding:8px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
   #toast.show{opacity:1}
@@ -69,10 +76,13 @@
     <p class="hint">
       <b>קליק על הרצפה</b> מוסיף נקודה. <b>גרירת נקודה</b> מזיזה אותה אופקית,
       ועם <b>Shift</b> (או כפתור "אנכי") — למעלה ולמטה. גרירה ברקע מסובבת את המבט, גלגלת מקרבת.
-      Delete מוחק את הנקודה הנבחרת.
+      Delete מוחק את מה שנבחר.<br>
+      במצב <b>קטע</b>: שני קליקים (על הרצפה או על נקודות קיימות) יוצרים קטע, וגרירת הקטע מזיזה את שני הקצוות יחד.
     </p>
     <div class="row">
-      <button id="bAdd" class="on">➕ הוספה בקליק</button>
+      <button id="mPoint" class="on">● נקודה</button>
+      <button id="mSeg">⟋ קטע</button>
+      <button id="mMove">✋ רק הזזה</button>
       <button id="bVert">↕ אנכי</button>
     </div>
     <div class="checks">
@@ -91,12 +101,16 @@
         <option value="prism">מנסרה משולשת</option>
         <option value="octa">אוקטאדר</option>
         <option value="rand">ענן אקראי</option>
+        <option value="skew">שני קטעים מצטלבים</option>
+        <option value="segprism">שלושה קטעים מקבילים</option>
       </select>
       <button id="bClear">ניקוי</button>
       <button id="bShare" class="primary">🔗 העתקת קישור</button>
     </div>
     <div class="sec">נקודות</div>
     <ul id="list"></ul>
+    <div id="segSec" class="sec">קטעים</div>
+    <ul id="segs"></ul>
   </aside>
   <main id="view"></main>
 </div>
@@ -176,15 +190,46 @@ function addPoint(x, y, z, silent) {
   if (!silent) { select(p); refresh(); }
   return p;
 }
-function removePoint(p) {
+function removePointRaw(p) {
+  segs.filter(s => s.a === p || s.b === p).forEach(removeSegRaw);
   p.mesh.remove(p.lbl); p.lbl.element.remove(); scene.remove(p.mesh);
   pts.splice(pts.indexOf(p), 1);
   if (selected === p) selected = null;
+  if (pending === p) cancelPending();
+}
+function removePoint(p) { removePointRaw(p); refresh(); }
+function clearAll() { [...pts].forEach(removePointRaw); selected = null; nameCounter = 0; cancelPending(); }
+function select(o) { selected = o; paint(); markListSel(); }
+function paint() {
+  pts.forEach(p => p.mesh.material = p === selected ? matSel : (p.onHull ? matHull : matInner));
+  segs.forEach(s => s.mesh.material = s === selected ? matSegSel : matSeg);
+}
+
+// ---------- segments ----------
+const segs = [];         // {a, b, mesh}  — a, b are points
+const cylGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 12);
+const matSeg    = new THREE.MeshStandardMaterial({ color:C.brown, roughness:.6 });
+const matSegSel = new THREE.MeshStandardMaterial({ color:C.gold, roughness:.4, emissive:0x3a2a00 });
+const UP_Y = new THREE.Vector3(0, 1, 0);
+function placeSeg(s) {
+  const d = s.b.v.clone().sub(s.a.v), L = d.length();
+  s.mesh.visible = L > 1e-6; if (!s.mesh.visible) return;
+  s.mesh.position.copy(s.a.v).addScaledVector(d, 0.5);
+  s.mesh.quaternion.setFromUnitVectors(UP_Y, d.normalize());
+  s.mesh.scale.set(1, L, 1);
+}
+function addSeg(a, b, silent) {
+  if (a === b || segs.some(s => (s.a === a && s.b === b) || (s.a === b && s.b === a))) return;
+  const s = { a, b, mesh: new THREE.Mesh(cylGeo, matSeg) };
+  s.mesh.userData.s = s; scene.add(s.mesh); segs.push(s); placeSeg(s);
+  if (!silent) { select(s); refresh(); }
+}
+function removeSegRaw(s) { scene.remove(s.mesh); segs.splice(segs.indexOf(s), 1); if (selected === s) selected = null; }
+function removeSeg(s, withEnds) {
+  removeSegRaw(s);
+  if (withEnds) [s.a, s.b].forEach(p => { if (pts.includes(p) && !segs.some(t => t.a === p || t.b === p)) removePointRaw(p); });
   refresh();
 }
-function clearAll() { [...pts].forEach(p => { p.mesh.remove(p.lbl); p.lbl.element.remove(); scene.remove(p.mesh); }); pts.length = 0; selected = null; nameCounter = 0; }
-function select(p) { selected = p; paint(); markListSel(); }
-function paint() { pts.forEach(p => p.mesh.material = p === selected ? matSel : (p.onHull ? matHull : matInner)); }
 
 // ---------- hull ----------
 const hullGroup = new THREE.Group(); scene.add(hullGroup);
@@ -220,6 +265,7 @@ function hull2D(P) { // monotone chain on {x,y,ref}
 
 function updateHull() {
   clearHull();
+  segs.forEach(placeSeg);
   const vs = pts.map(p => p.v);
   const info = analyze(vs);
   const show = { faces: $('cFaces').checked, edges: $('cEdges').checked };
@@ -306,20 +352,36 @@ function syncList() {
     p.li.classList.toggle('inner', !p.onHull);
     p.li.querySelectorAll('input').forEach(inp => { if (document.activeElement !== inp) inp.value = fmt(p.v[inp.dataset.a]); });
   });
+  segs.forEach(s => s.li && (s.li.querySelector('.len').textContent = 'אורך ' + fmt(s.a.v.distanceTo(s.b.v))));
 }
-function markListSel() { pts.forEach(p => p.li && p.li.classList.toggle('sel', p === selected)); }
+function renderSegList() {
+  const ul = $('segs'); ul.innerHTML = '';
+  $('segSec').style.display = segs.length ? '' : 'none';
+  segs.forEach(s => {
+    const li = document.createElement('li'); s.li = li;
+    li.innerHTML = `<span class="name">${s.a.name}${s.b.name}</span><span class="len"></span><button class="del" title="מחיקה">✕</button>`;
+    li.querySelector('.name').onclick = () => select(s);
+    li.querySelector('.del').onclick = () => removeSeg(s, true);
+    ul.appendChild(li);
+  });
+  syncList(); markListSel();
+}
+function markListSel() { [...pts, ...segs].forEach(o => o.li && o.li.classList.toggle('sel', o === selected)); }
 
 // ---------- share link ----------
 function saveHash() {
   const s = pts.map(p => [p.v.x, p.v.y, p.v.z].map(fmt).join(',')).join(';');
-  history.replaceState(null, '', s ? '#p=' + s : location.pathname + location.search);
+  const g = segs.map(t => pts.indexOf(t.a) + '-' + pts.indexOf(t.b)).join(';');
+  history.replaceState(null, '', s ? '#p=' + s + (g ? '&s=' + g : '') : location.pathname + location.search);
 }
 function loadHash() {
   const m = location.hash.match(/p=([-\d.,;e]+)/); if (!m) return false;
   m[1].split(';').forEach(t => { const [x, y, z] = t.split(',').map(Number); if ([x, y, z].every(Number.isFinite)) addPoint(x, y, z, true); });
+  const m2 = location.hash.match(/s=([\d;-]+)/);
+  if (m2) m2[1].split(';').forEach(t => { const [i, j] = t.split('-').map(Number); if (pts[i] && pts[j]) addSeg(pts[i], pts[j], true); });
   return pts.length > 0;
 }
-function refresh() { updateHull(); renderList(); saveHash(); }
+function refresh() { updateHull(); renderList(); renderSegList(); saveHash(); }
 
 // ---------- presets ----------
 const PRESETS = {
@@ -328,20 +390,26 @@ const PRESETS = {
   pyr:   [[-2,-2,0],[2,-2,0],[2,2,0],[-2,2,0],[0,0,3.5]],
   prism: [[2,0,0],[-1,1.73,0],[-1,-1.73,0],[2,0,3],[-1,1.73,3],[-1,-1.73,3]],
   octa:  [[2,0,2],[-2,0,2],[0,2,2],[0,-2,2],[0,0,4],[0,0,0]],
+  skew:  { p: [[-2,0,0],[2,0,0],[0,-2,3],[0,2,3]], s: [[0,1],[2,3]] },
+  segprism: { p: [[2,0,0],[2,0,3],[-1,1.73,0],[-1,1.73,3],[-1,-1.73,0],[-1,-1.73,3]], s: [[0,1],[2,3],[4,5]] },
 };
 function loadPreset(k) {
   clearAll();
   if (k === 'rand') {
     const r = () => Math.round((Math.random() * 6 - 3) * 2) / 2;
     for (let i = 0; i < 12; i++) addPoint(r(), r(), Math.round(Math.random() * 8) / 2, true);
-  } else PRESETS[k].forEach(([x, y, z]) => addPoint(x, y, z, true));
+  } else {
+    const pr = PRESETS[k], ps = Array.isArray(pr) ? pr : pr.p;
+    const made = ps.map(([x, y, z]) => addPoint(x, y, z, true));
+    (pr.s || []).forEach(([i, j]) => addSeg(made[i], made[j], true));
+  }
   refresh();
 }
 
 // ---------- interaction ----------
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-let addMode = true, vertMode = false, drag = null, down = null;
+let mode = 'point', vertMode = false, drag = null, down = null, pending = null;
 const snap = n => $('cSnap').checked ? Math.round(n * 2) / 2 : Math.round(n * 100) / 100;
 
 function setRay(e) {
@@ -349,24 +417,42 @@ function setRay(e) {
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
 }
-const pick = () => { const h = ray.intersectObjects(pts.map(p => p.mesh), false); return h.length ? h[0].object.userData.p : null; };
+const pickPoint = () => { const h = ray.intersectObjects(pts.map(p => p.mesh), false); return h.length ? h[0].object.userData.p : null; };
+const pickSeg = () => { const h = ray.intersectObjects(segs.map(s => s.mesh), false); return h.length ? h[0].object.userData.s : null; };
+
+function dragPlane(vertical, through) {
+  if (vertical) {
+    const n = new THREE.Vector3(); camera.getWorldDirection(n); n.z = 0;
+    if (n.lengthSq() < EPS) n.set(0, 1, 0);
+    return new THREE.Plane().setFromNormalAndCoplanarPoint(n.normalize(), through);
+  }
+  return new THREE.Plane(new THREE.Vector3(0, 0, 1), -through.z);
+}
+
+// dashed preview line while drawing a segment
+const preview = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+  new THREE.LineDashedMaterial({ color:C.brown, dashSize:.2, gapSize:.15 }));
+preview.visible = false; scene.add(preview);
+function showPreview(to) { preview.geometry.setFromPoints([pending.v, to]); preview.computeLineDistances(); preview.visible = true; }
+function cancelPending() { pending = null; preview.visible = false; }
+function segPick(p) {
+  if (!pending) { pending = p; select(p); toast(`קצה ראשון: ${p.name} — עכשיו קליק על הקצה השני`); }
+  else if (pending !== p) { const a = pending; cancelPending(); addSeg(a, p); }
+}
 
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   setRay(e);
-  const p = pick();
-  if (p) {
-    select(p);
-    const vertical = e.shiftKey || vertMode;
-    let plane;
-    if (vertical) {
-      const n = new THREE.Vector3(); camera.getWorldDirection(n); n.z = 0;
-      if (n.lengthSq() < EPS) n.set(0, 1, 0);
-      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n.normalize(), p.v);
-    } else plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -p.v.z);
+  const vertical = e.shiftKey || vertMode;
+  const p = pickPoint(), s = p ? null : pickSeg();
+  if (p || s) {
+    const through = p ? p.v : s.a.v.clone().add(s.b.v).multiplyScalar(0.5);
+    const plane = dragPlane(vertical, through);
     const hit = new THREE.Vector3();
     if (!ray.ray.intersectPlane(plane, hit)) return;
-    drag = { p, plane, vertical, off: hit.sub(p.v) };
+    select(p || s);
+    drag = { p, s, plane, vertical, start: hit.clone(), p0: p && p.v.clone(), a0: s && s.a.v.clone(), b0: s && s.b.v.clone(),
+             x: e.clientX, y: e.clientY, moved: false };
     controls.enabled = false;
     renderer.domElement.setPointerCapture(e.pointerId);
   } else down = { x: e.clientX, y: e.clientY };
@@ -374,33 +460,67 @@ renderer.domElement.addEventListener('pointerdown', e => {
 
 renderer.domElement.addEventListener('pointermove', e => {
   setRay(e);
-  if (!drag) { renderer.domElement.style.cursor = pick() ? 'grab' : (addMode ? 'crosshair' : 'default'); return; }
+  if (!drag) {
+    const over = pickPoint() || pickSeg();
+    renderer.domElement.style.cursor = over ? 'grab' : (mode === 'move' ? 'default' : 'crosshair');
+    if (pending) {
+      const hp = pickPoint(), hit = new THREE.Vector3();
+      if (hp) showPreview(hp.v); else if (ray.ray.intersectPlane(floor, hit)) showPreview(hit);
+    }
+    return;
+  }
+  if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
+  if (!drag.moved) return;
   renderer.domElement.style.cursor = 'grabbing';
   const hit = new THREE.Vector3();
   if (!ray.ray.intersectPlane(drag.plane, hit)) return;
-  hit.sub(drag.off);
-  const v = drag.p.v;
-  if (drag.vertical) v.z = snap(hit.z); else { v.x = snap(hit.x); v.y = snap(hit.y); }
-  drag.p.mesh.position.copy(v);
+  const d = hit.sub(drag.start);
+  // a point snaps to the grid; a segment moves rigidly (snapped displacement)
+  const apply = (v, v0, rigid) => {
+    const f = rigid ? (o, dd) => o + snap(dd) : (o, dd) => snap(o + dd);
+    if (drag.vertical) v.z = f(v0.z, d.z); else { v.x = f(v0.x, d.x); v.y = f(v0.y, d.y); }
+  };
+  if (drag.p) { apply(drag.p.v, drag.p0, false); drag.p.mesh.position.copy(drag.p.v); }
+  else {
+    apply(drag.s.a.v, drag.a0, true); apply(drag.s.b.v, drag.b0, true);
+    drag.s.a.mesh.position.copy(drag.s.a.v); drag.s.b.mesh.position.copy(drag.s.b.v);
+  }
   updateHull(); syncList();
 });
 
 renderer.domElement.addEventListener('pointerup', e => {
-  if (drag) { drag = null; controls.enabled = true; saveHash(); return; }
+  if (drag) {
+    const d = drag; drag = null; controls.enabled = true;
+    if (!d.moved && mode === 'seg' && d.p) segPick(d.p); else saveHash();
+    return;
+  }
   if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) {
     setRay(e);
     const hit = new THREE.Vector3();
-    if (addMode && ray.ray.intersectPlane(floor, hit)) addPoint(snap(hit.x), snap(hit.y), 0);
-    else { selected = null; paint(); markListSel(); }
+    const onFloor = ray.ray.intersectPlane(floor, hit);
+    if (mode === 'point' && onFloor) addPoint(snap(hit.x), snap(hit.y), 0);
+    else if (mode === 'seg' && onFloor) segPick(addPoint(snap(hit.x), snap(hit.y), 0));
+    else { cancelPending(); selected = null; paint(); markListSel(); }
   }
   down = null;
 });
 
 addEventListener('keydown', e => {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selected && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); removePoint(selected); }
+  if (document.activeElement.tagName === 'INPUT') return;
+  if (e.key === 'Escape') cancelPending();
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    e.preventDefault();
+    selected.a ? removeSeg(selected, true) : removePoint(selected);
+  }
 });
 
-$('bAdd').onclick = () => { addMode = !addMode; $('bAdd').classList.toggle('on', addMode); };
+function setMode(m) {
+  mode = m; cancelPending();
+  [['point', 'mPoint'], ['seg', 'mSeg'], ['move', 'mMove']].forEach(([k, id]) => $(id).classList.toggle('on', k === m));
+}
+$('mPoint').onclick = () => setMode('point');
+$('mSeg').onclick = () => setMode('seg');
+$('mMove').onclick = () => setMode('move');
 $('bVert').onclick = () => { vertMode = !vertMode; $('bVert').classList.toggle('on', vertMode); };
 ['cFaces', 'cEdges'].forEach(id => $(id).onchange = updateHull);
 $('cLabels').onchange = () => labelRenderer.domElement.style.display = $('cLabels').checked ? '' : 'none';
