@@ -132,6 +132,7 @@
         <option value="cutCorner">קובייה — חיתוך פינה</option>
         <option value="cutRect">קובייה — חתך מלבני באלכסון</option>
         <option value="cutHex">קובייה — חתך משושה</option>
+        <option value="cutTwoPyr">קובייה בלי שתי פירמידות פינתיות</option>
         <option value="cutCyl">גליל — חתך משופע</option>
       </select>
       <button id="bClear">ניקוי</button>
@@ -688,6 +689,7 @@ const PRESETS = {
   cutCorner: { p: CUBE, e: [[6,2,1/3],[6,5,1/3],[6,7,1/3]], x: [[8,9,10]] },
   cutRect:   { p: CUBE, x: [[0,1,6]] },
   cutHex:    { p: CUBE, e: [[1,5,.5],[1,2,.5],[2,3,.5]], x: [[8,9,10]] },
+  cutTwoPyr: { p: CUBE, x: [[1,3,4],[2,5,7]] },
   cutCyl:    { p: CYL, c: [[0,1,2],[3,4,5]], e: [[0,3,.2],[1,4,.5],[2,5,.8]], x: [[6,7,8]] },
 };
 function loadPreset(k) {
